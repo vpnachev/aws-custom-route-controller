@@ -7,10 +7,15 @@
 package updater
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/sts"
 )
 
 // TagNameKubernetesClusterPrefix is the tag name we use to differentiate multiple
@@ -33,7 +38,56 @@ type EC2Routes interface {
 	DeleteRoute(request *ec2.DeleteRouteInput) (*ec2.DeleteRouteOutput, error)
 }
 
+func createTokenFile(token []byte, clusterID string) (string, error) {
+	tokenFile := filepath.Join(os.TempDir(), clusterID, "token")
+	if err := os.MkdirAll(filepath.Dir(tokenFile), 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(tokenFile, token, os.ModeAppend); err != nil {
+		return "", err
+	}
+
+	return tokenFile, nil
+}
+
 func NewAWSEC2Routes(creds *Credentials, region string) (EC2Routes, error) {
+	if len(creds.ARN) != 0 {
+
+		path, err := createTokenFile(creds.Token, creds.ClusterName)
+		if err != nil {
+			return nil, err
+		}
+
+		sess, err := session.NewSession()
+		if err != nil {
+			return nil, err
+		}
+
+		webIDProvider := stscreds.NewWebIdentityRoleProviderWithToken(
+			sts.New(sess),
+			string(creds.ARN),
+			creds.ClusterName,
+			stscreds.FetchTokenPath(path),
+		)
+
+		creds, err := webIDProvider.Retrieve()
+		if err != nil {
+			return nil, err
+		}
+
+		cc := credentials.NewStaticCredentialsFromCreds(creds)
+		config := &aws.Config{
+			Credentials: cc,
+			Region:      aws.String(region),
+		}
+
+		s, err := session.NewSession(config)
+		if err != nil {
+			return nil, err
+		}
+		return ec2.New(s, config), nil
+
+	}
 	var (
 		awsConfig = &aws.Config{
 			Credentials: credentials.NewStaticCredentials(creds.AccessKeyID, creds.SecretAccessKey, ""),

@@ -22,6 +22,12 @@ const (
 	AccessKeyID = "accessKeyID"
 	// SecretAccessKey is a constant for the key in a cloud provider secret and backup secret that holds the AWS secret access key.
 	SecretAccessKey = "secretAccessKey"
+
+	// ARNKey is a constant for the key in a cloud provider secret and backup secret that holds the AWS arn name.
+	ARNKey = "arn"
+	// WebIdentityTokenKey is a constant for the key in a cloud provider secret and backup secret that holds the AWS web identity token.
+	WebIdentityTokenKey = "token"
+
 	// InClusterConfig is a special name for the kubeconfig to use in-cluster client
 	InClusterConfig = "inClusterConfig"
 )
@@ -29,6 +35,10 @@ const (
 type Credentials struct {
 	AccessKeyID     string
 	SecretAccessKey string
+
+	ARN         string
+	Token       []byte
+	ClusterName string
 }
 
 func LoadCredentials(controlKubeconfig, namespace, secretName string) (*Credentials, error) {
@@ -53,12 +63,26 @@ func LoadCredentials(controlKubeconfig, namespace, secretName string) (*Credenti
 		return nil, err
 	}
 
-	return extractCredentials(secret)
+	return extractCredentials(secret, namespace)
 }
 
-func extractCredentials(secret *corev1.Secret) (*Credentials, error) {
+func extractCredentials(secret *corev1.Secret, clusterName string) (*Credentials, error) {
 	if secret.Data == nil {
 		return nil, fmt.Errorf("secret does not contain any data")
+	}
+
+	if arn, ok := secret.Data[ARNKey]; ok && len(arn) != 0 {
+		token, ok := secret.Data[WebIdentityTokenKey]
+		if !ok || len(token) == 0 {
+			return nil, fmt.Errorf("Web identity token must not be empty")
+		}
+
+		return &Credentials{
+			ARN:         string(arn),
+			Token:       token,
+			ClusterName: clusterName,
+		}, nil
+
 	}
 
 	accessKeyID, err := getSecretDataValue(secret, AccessKeyID, nil, true)
